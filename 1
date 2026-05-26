@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PhysicsLab - 交互式物理模拟实验平台</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:'Segoe UI',sans-serif;background:#0a0e1a;color:#e2e8f0;height:100vh;overflow:hidden;display:flex;}
+.sidebar{width:300px;background:rgba(10,14,26,.98);border-right:1px solid rgba(255,255,255,.06);display:flex;flex-direction:column;height:100vh;overflow-y:auto;}
+.sidebar-header{padding:18px 20px;border-bottom:1px solid rgba(255,255,255,.06);}
+.sidebar-header h1{font-size:18px;color:#f97316;margin-bottom:4px;}
+.sidebar-header p{font-size:10px;opacity:.4;}
+.exp-tabs{display:flex;flex-wrap:wrap;gap:4px;padding:12px 14px;border-bottom:1px solid rgba(255,255,255,.06);}
+.exp-tab{padding:7px 12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:7px;cursor:pointer;font-size:11px;transition:.2s;}
+.exp-tab:hover,.exp-tab.active{background:rgba(249,115,22,.12);border-color:#f97316;color:#f97316;}
+.params{padding:14px;flex:1;}
+.param-group{margin-bottom:14px;}
+.param-group h3{font-size:11px;color:#f97316;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px;}
+.param-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+.param-row label{font-size:12px;opacity:.6;min-width:60px;}
+.param-row input[type=range]{flex:1;accent-color:#f97316;}
+.param-row .val{font-size:11px;color:#f97316;min-width:50px;text-align:right;font-family:'Fira Code',monospace;}
+.ctrl-btns{padding:14px;border-top:1px solid rgba(255,255,255,.06);display:flex;gap:6px;flex-wrap:wrap;}
+.ctrl-btn{padding:8px 14px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:7px;color:#e2e8f0;cursor:pointer;font-size:12px;transition:.2s;flex:1;text-align:center;}
+.ctrl-btn:hover{background:rgba(249,115,22,.15);border-color:#f97316;}
+.ctrl-btn.primary{background:rgba(249,115,22,.2);border-color:#f97316;color:#f97316;}
+.data-panel{padding:14px;border-top:1px solid rgba(255,255,255,.06);max-height:180px;overflow-y:auto;}
+.data-panel h3{font-size:11px;color:#f97316;margin-bottom:6px;}
+.data-row{display:flex;justify-content:space-between;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.03);}
+.data-row .dk{opacity:.5;}
+.data-row .dv{color:#f97316;font-family:'Fira Code',monospace;}
+
+.main{flex:1;position:relative;overflow:hidden;}
+#simCanvas{position:absolute;top:0;left:0;width:100%;height:100%;}
+.overlay-info{position:absolute;top:12px;left:12px;padding:10px 14px;background:rgba(0,0,0,.6);border-radius:10px;font-size:12px;max-width:250px;backdrop-filter:blur(4px);}
+.overlay-info h4{color:#f97316;margin-bottom:4px;font-size:13px;}
+.time-display{position:absolute;top:12px;right:12px;padding:8px 14px;background:rgba(0,0,0,.6);border-radius:8px;font-size:13px;font-family:'Fira Code',monospace;}
+.trail-toggle{position:absolute;bottom:12px;right:12px;padding:8px 14px;background:rgba(0,0,0,.6);border-radius:8px;font-size:12px;cursor:pointer;}
+</style>
+</head>
+<body>
+<div class="sidebar">
+  <div class="sidebar-header">
+    <h1>🧪 PhysicsLab</h1>
+    <p>交互式物理模拟实验平台</p>
+  </div>
+  <div class="exp-tabs" id="expTabs">
+    <div class="exp-tab active" onclick="switchExp('projectile')">🎯 抛体运动</div>
+    <div class="exp-tab" onclick="switchExp('pendulum')">🔔 单摆运动</div>
+    <div class="exp-tab" onclick="switchExp('spring')">🌀 弹簧振动</div>
+    <div class="exp-tab" onclick="switchExp('collision')">💥 碰撞模拟</div>
+    <div class="exp-tab" onclick="switchExp('orbit')">🪐 轨道运动</div>
+    <div class="exp-tab" onclick="switchExp('wave')">🌊 波动模拟</div>
+  </div>
+  <div class="params" id="paramsPanel"></div>
+  <div class="ctrl-btns">
+    <div class="ctrl-btn primary" onclick="toggleSim()">▶ 开始</div>
+    <div class="ctrl-btn" onclick="resetSim()">↺ 重置</div>
+    <div class="ctrl-btn" onclick="stepSim()">→ 单步</div>
+  </div>
+  <div class="data-panel" id="dataPanel">
+    <h3>📊 实时数据</h3>
+    <div id="dataRows"></div>
+  </div>
+</div>
+<div class="main">
+  <canvas id="simCanvas"></canvas>
+  <div class="overlay-info" id="overlayInfo"></div>
+  <div class="time-display" id="timeDisplay">t = 0.00s</div>
+  <div class="trail-toggle" onclick="toggleTrail()">🖊️ 轨迹: <span id="trailState">开</span></div>
+</div>
+
+<script>
+const canvas = document.getElementById('simCanvas');
+const ctx = canvas.getContext('2d');
+let W, H;
+let running = false;
+let animId = null;
+let time = 0;
+let dt = 1/60;
+let showTrail = true;
+let trail = [];
+let currentExp = 'projectile';
+
+// ====== 实验参数 ======
+const experiments = {
+    projectile: {
+        name: '抛体运动', icon: '🎯',
+        desc: '模拟不同角度和初速度下的抛体运动轨迹，观察水平和垂直分运动的合成效果。',
+        params: { v0:30, angle:45, g:9.8, mass:1, airResist:0 },
+        labels: { v0:'初速度(m/s)', angle:'发射角(°)', g:'重力(m/s²)', mass:'质量(kg)', airResist:'空气阻力' },
+        ranges: { v0:[5,80], angle:[5,85], g:[1,20], mass:[0.1,10], airResist:[0,0.5] }
+    },
+    pendulum: {
+        name: '单摆运动', icon: '🔔',
+        desc: '模拟简单摆的周期性运动，观察摆长和初始角度对周期的影响。',
+        params: { length:2, angle0:30, g:9.8, damping:0.01 },
+        labels: { length:'摆长(m)', angle0:'初始角(°)', g:'重力(m/s²)', damping:'阻尼系数' },
+        ranges: { length:[0.5,5], angle0:[5,80], g:[1,20], damping:[0,0.2] }
+    },
+    spring: {
+        name: '弹簧振动', icon: '🌀',
+        desc: '模拟弹簧-质量系统的简谐运动，包含阻尼衰减效果。',
+        params: { k:20, mass:1, x0:1.5, damping:0.1 },
+        labels: { k:'弹性系数(N/m)', mass:'质量(kg)', x0:'初始位移(m)', damping:'阻尼系数' },
+        ranges: { k:[5,100], mass:[0.1,10], x0:[0.5,3], damping:[0,1] }
+    },
+    collision: {
+        name: '碰撞模拟', icon: '💥',
+        desc: '模拟两个物体的弹性/非弹性碰撞，验证动量和能量守恒定律。',
+        params: { m1:2, m2:1, v1:5, v2:-3, restitution:1 },
+        labels: { m1:'物体1质量(kg)', m2:'物体2质量(kg)', v1:'物体1速度(m/s)', v2:'物体2速度(m/s)', restitution:'恢复系数' },
+        ranges: { m1:[0.5,10], m2:[0.5,10], v1:[-10,10], v2:[-10,10], restitution:[0,1] }
+    },
+    orbit: {
+        name: '轨道运动', icon: '🪐',
+        desc: '模拟天体在万有引力作用下的轨道运动，观察椭圆轨道和开普勒定律。',
+        params: { M:1000, m:1, r0:200, vt:4, G:1 },
+        labels: { M:'中心天体质量', m:'卫星质量', r0:'初始半径', vt:'切向速度', G:'引力常量' },
+        ranges: { M:[100,5000], m:[0.1,10], r0:[80,350], vt:[1,8], G:[0.1,5] }
+    },
+    wave: {
+        name: '波动模拟', icon: '🌊',
+        desc: '模拟横波传播过程，观察波长、频率和振幅对波形的影响。',
+        params: { amplitude:60, frequency:2, wavelength:150, speed:3, damping:0 },
+        labels: { amplitude:'振幅(px)', frequency:'频率(Hz)', wavelength:'波长(px)', speed:'波速', damping:'衰减' },
+        ranges: { amplitude:[10,120], frequency:[0.5,5], wavelength:[50,300], speed:[1,10], damping:[0,0.05] }
+    }
+};
+
+let params = {};
+let simState = {};
+
+// ====== 初始化 ======
+function resize(){
+    const dpr = devicePixelRatio||1;
+    W = canvas.offsetWidth; H = canvas.offsetHeight;
+    canvas.width = W*dpr; canvas.height = H*dpr;
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    if(!running) drawFrame();
+}
+
+function switchExp(name){
+    currentExp = name;
+    document.querySelectorAll('.exp-tab').forEach(t=>t.classList.remove('active'));
+    event.target.classList.add('active');
+    resetSim();
+    buildParams();
+    updateInfo();
+}
+
+function buildParams(){
+    const exp = experiments[currentExp];
+    params = {...exp.params};
+    let html = `<div class="param-group"><h3>${exp.icon} ${exp.name} 参数</h3>`;
+    Object.keys(exp.params).forEach(k=>{
+        const [min,max] = exp.ranges[k];
+        const step = (max-min)>10 ? 1 : 0.01;
+        html += `<div class="param-row">
+            <label>${exp.labels[k]}</label>
+            <input type="range" min="${min}" max="${max}" step="${step}" value="${params[k]}" oninput="setParam('${k}',this.value)">
+            <span class="val" id="pv_${k}">${params[k]}</span>
+        </div>`;
+    });
+    html += '</div>';
+    document.getElementById('paramsPanel').innerHTML = html;
+}
+
+function setParam(k, v){
+    params[k] = parseFloat(v);
+    document.getElementById('pv_'+k).textContent = parseFloat(v).toFixed(2);
+    if(!running) { resetSim(); drawFrame(); }
+}
+
+function updateInfo(){
+    const exp = experiments[currentExp];
+    document.getElementById('overlayInfo').innerHTML = `<h4>${exp.icon} ${exp.name}</h4><p style="font-size:11px;opacity:.7;line-height:1.5;">${exp.desc}</p>`;
+}
+
+// ====== 模拟控制 ======
+function toggleSim(){
+    running = !running;
+    document.querySelector('.ctrl-btn.primary').textContent = running ? '⏸ 暂停' : '▶ 开始';
+    if(running) loop();
+    else cancelAnimationFrame(animId);
+}
+
+function resetSim(){
+    running = false; time = 0; trail = [];
+    document.querySelector('.ctrl-btn.primary').textContent = '▶ 开始';
+    cancelAnimationFrame(animId);
+    initState();
+    drawFrame();
+}
+
+function stepSim(){
+    if(running) return;
+    updatePhysics();
+    time += dt;
+    drawFrame();
+}
+
+function toggleTrail(){
+    showTrail = !showTrail;
+    document.getElementById('trailState').textContent = showTrail?'开':'关';
+    if(!showTrail) trail = [];
+    if(!running) drawFrame();
+}
+
+function loop(){
+    if(!running) return;
+    updatePhysics();
+    time += dt;
+    drawFrame();
+    animId = requestAnimationFrame(loop);
+}
+
+// ====== 物理引擎 ======
+function initState(){
+    const p = params;
+    switch(currentExp){
+        case 'projectile':
+            const rad = p.angle * Math.PI/180;
+            simState = { x:50, y:H-80, vx:p.v0*Math.cos(rad)*3, vy:-p.v0*Math.sin(rad)*3, landed:false };
+            break;
+        case 'pendulum':
+            simState = { theta: p.angle0*Math.PI/180, omega: 0 };
+            break;
+        case 'spring':
+            simState = { x: p.x0, v: 0 };
+            break;
+        case 'collision':
+            simState = { x1:W*0.25, x2:W*0.75, v1:p.v1*20, v2:p.v2*20, collided:false, phase:'moving' };
+            break;
+        case 'orbit':
+            simState = { x:p.r0, y:0, vx:0, vy:p.vt };
+            break;
+        case 'wave':
+            simState = { phase: 0 };
+            break;
+    }
+}
+
+function updatePhysics(){
+    const p = params;
+    switch(currentExp){
+        case 'projectile': {
+            if(simState.landed) return;
+            const drag = p.airResist;
+            const speed = Math.sqrt(simState.vx**2+simState.vy**2);
+            simState.vx -= drag*simState.vx*speed*dt;
+            simState.vy += p.g*3*dt - drag*simState.vy*speed*dt;
+            simState.x += simState.vx*dt;
+            simState.y += simState.vy*dt;
+            if(showTrail) trail.push({x:simState.x, y:simState.y});
+            if(simState.y >= H-80){ simState.y=H-80; simState.landed=true; }
+            break;
+        }
+        case 'pendulum': {
+            const acc = -(p.g/p.length)*Math.sin(simState.theta) - p.damping*simState.omega;
+            simState.omega += acc*dt;
+            simState.theta += simState.omega*dt;
+            const pivotX=W/2, pivotY=80;
+            const bx=pivotX+p.length*100*Math.sin(simState.theta);
+            const by=pivotY+p.length*100*Math.cos(simState.theta);
+            if(showTrail) trail.push({x:bx,y:by});
+            break;
+        }
+        case 'spring': {
+            const acc = -(p.k/p.mass)*simState.x - p.damping*simState.v;
+            simState.v += acc*dt;
+            simState.x += simState.v*dt;
+            break;
+        }
+        case 'collision': {
+            simState.x1 += simState.v1*dt;
+            simState.x2 += simState.v2*dt;
+            const r1=20+p.m1*5, r2=20+p.m2*5;
+            if(!simState.collided && Math.abs(simState.x1-simState.x2)<(r1+r2)){
+                const e=p.restitution;
+                const v1f=((p.m1-e*p.m2)*simState.v1+(1+e)*p.m2*simState.v2)/(p.m1+p.m2);
+                const v2f=((p.m2-e*p.m1)*simState.v2+(1+e)*p.m1*simState.v1)/(p.m1+p.m2);
+                simState.v1=v1f; simState.v2=v2f; simState.collided=true;
+            }
+            break;
+        }
+        case 'orbit': {
+            const cx=W/2, cy=H/2;
+            const dx=simState.x, dy=simState.y;
+            const r=Math.sqrt(dx*dx+dy*dy)||1;
+            const F=p.G*p.M*p.m/(r*r);
+            const ax=-F*dx/(r*p.m), ay=-F*dy/(r*p.m);
+            simState.vx+=ax*dt; simState.vy+=ay*dt;
+            simState.x+=simState.vx*dt; simState.y+=simState.vy*dt;
+            if(showTrail) trail.push({x:cx+simState.x, y:cy+simState.y});
+            if(trail.length>2000) trail.shift();
+            break;
+        }
+        case 'wave': {
+            simState.phase += p.speed*dt;
+            break;
+        }
+    }
+    updateDataPanel();
+}
+
+// ====== 渲染 ======
+function drawFrame(){
+    ctx.clearRect(0,0,W,H);
+    drawBackground();
+    switch(currentExp){
+        case 'projectile': drawProjectile(); break;
+        case 'pendulum': drawPendulum(); break;
+        case 'spring': drawSpring(); break;
+        case 'collision': drawCollision(); break;
+        case 'orbit': drawOrbit(); break;
+        case 'wave': drawWave(); break;
+    }
+    document.getElementById('timeDisplay').textContent = `t = ${time.toFixed(2)}s`;
+}
+
+function drawBackground(){
+    // 网格
+    ctx.strokeStyle='rgba(255,255,255,.03)'; ctx.lineWidth=1;
+    for(let x=0;x<W;x+=50){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+    for(let y=0;y<H;y+=50){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+}
+
+function drawTrail(color){
+    if(!showTrail||trail.length<2) return;
+    ctx.strokeStyle=color||'rgba(249,115,22,.3)';
+    ctx.lineWidth=2; ctx.beginPath();
+    trail.forEach((p,i)=>{ i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y); });
+    ctx.stroke();
+}
+
+function drawProjectile(){
+    // 地面
+    ctx.fillStyle='rgba(255,255,255,.05)';
+    ctx.fillRect(0,H-80,W,80);
+    ctx.strokeStyle='rgba(255,255,255,.15)'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(0,H-80); ctx.lineTo(W,H-80); ctx.stroke();
+    // 轨迹
+    drawTrail('rgba(249,115,22,.4)');
+    // 球
+    ctx.fillStyle='#f97316';
+    ctx.beginPath(); ctx.arc(simState.x, simState.y, 8+params.mass*2, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle='rgba(249,115,22,.3)';
+    ctx.beginPath(); ctx.arc(simState.x, simState.y, 12+params.mass*2, 0, Math.PI*2); ctx.fill();
+    // 速度向量
+    if(!simState.landed){
+        ctx.strokeStyle='#22c55e'; ctx.lineWidth=2;
+        ctx.beginPath(); ctx.moveTo(simState.x,simState.y);
+        ctx.lineTo(simState.x+simState.vx*0.3, simState.y+simState.vy*0.3); ctx.stroke();
+        // 箭头
+        const angle=Math.atan2(simState.vy,simState.vx);
+        const ex=simState.x+simState.vx*0.3, ey=simState.y+simState.vy*0.3;
+        ctx.fillStyle='#22c55e';
+        ctx.beginPath(); ctx.moveTo(ex,ey);
+        ctx.lineTo(ex-8*Math.cos(angle-0.4),ey-8*Math.sin(angle-0.4));
+        ctx.lineTo(ex-8*Math.cos(angle+0.4),ey-8*Math.sin(angle+0.4));
+        ctx.closePath(); ctx.fill();
+    }
+    // 发射器
+    ctx.fillStyle='rgba(255,255,255,.3)';
+    ctx.fillRect(40,H-95,20,15);
+}
+
+function drawPendulum(){
+    const pivotX=W/2, pivotY=80;
+    const L=params.length*100;
+    const bx=pivotX+L*Math.sin(simState.theta);
+    const by=pivotY+L*Math.cos(simState.theta);
+    // 轨迹
+    drawTrail('rgba(168,85,247,.3)');
+    // 支架
+    ctx.strokeStyle='rgba(255,255,255,.3)'; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.moveTo(pivotX-40,pivotY-5); ctx.lineTo(pivotX+40,pivotY-5); ctx.stroke();
+    // 绳
+    ctx.strokeStyle='rgba(255,255,255,.5)'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(pivotX,pivotY); ctx.lineTo(bx,by); ctx.stroke();
+    // 摆球
+    ctx.fillStyle='#a855f7';
+    ctx.beginPath(); ctx.arc(bx,by,18,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='rgba(168,85,247,.3)';
+    ctx.beginPath(); ctx.arc(bx,by,24,0,Math.PI*2); ctx.fill();
+    // 角度指示
+    ctx.strokeStyle='rgba(255,255,255,.15)'; ctx.lineWidth=1; ctx.setLineDash([4,4]);
+    ctx.beginPath(); ctx.moveTo(pivotX,pivotY); ctx.lineTo(pivotX,pivotY+L); ctx.stroke();
+    ctx.setLineDash([]);
+    // 角度弧
+    ctx.strokeStyle='#f97316'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.arc(pivotX,pivotY,40,-Math.PI/2+simState.theta,-Math.PI/2); ctx.stroke();
+}
+
+function drawSpring(){
+    const centerY=H/2, restX=150;
+    const blockX=restX + simState.x*100;
+    // 墙壁
+    ctx.fillStyle='rgba(255,255,255,.1)';
+    ctx.fillRect(0,centerY-60,30,120);
+    for(let i=0;i<8;i++){ ctx.strokeStyle='rgba(255,255,255,.2)'; ctx.beginPath(); ctx.moveTo(0,centerY-55+i*16); ctx.lineTo(25,centerY-45+i*16); ctx.stroke(); }
+    // 弹簧 zigzag
+    ctx.strokeStyle='#f97316'; ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.moveTo(30,centerY);
+    const springLen=blockX-30;
+    const coils=12;
+    const segLen=springLen/coils;
+    for(let i=0;i<coils;i++){
+        const x1=30+i*segLen+segLen*0.25;
+        const x2=30+i*segLen+segLen*0.75;
+        ctx.lineTo(x1, centerY+(i%2===0?-20:20));
+        ctx.lineTo(x2, centerY+(i%2===0?20:-20));
+    }
+    ctx.lineTo(blockX,centerY); ctx.stroke();
+    // 物块
+    const bw=40+params.mass*8;
+    ctx.fillStyle='rgba(249,115,22,.6)';
+    ctx.fillRect(blockX,centerY-bw/2,bw,bw);
+    ctx.strokeStyle='#f97316'; ctx.lineWidth=2;
+    ctx.strokeRect(blockX,centerY-bw/2,bw,bw);
+    // 平衡位置指示
+    ctx.strokeStyle='rgba(255,255,255,.1)'; ctx.setLineDash([5,5]); ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(restX,centerY-80); ctx.lineTo(restX,centerY+80); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle='rgba(255,255,255,.2)'; ctx.font='10px sans-serif';
+    ctx.fillText('平衡位置',restX-20,centerY+95);
+    // 位移曲线
+    if(showTrail){
+        trail.push({x:time*50+W*0.55, y:centerY-simState.x*60});
+        if(trail.length>300) trail.shift();
+        ctx.strokeStyle='rgba(34,211,153,.5)'; ctx.lineWidth=1.5; ctx.beginPath();
+        trail.forEach((p,i)=>{ i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y); }); ctx.stroke();
+        ctx.fillStyle='rgba(255,255,255,.2)'; ctx.font='10px sans-serif';
+        ctx.fillText('x(t) 位移曲线',W*0.55, centerY-80);
+    }
+}
+
+function drawCollision(){
+    const r1=20+params.m1*5, r2=20+params.m2*5;
+    // 地面
+    ctx.strokeStyle='rgba(255,255,255,.1)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(0,H/2+50); ctx.lineTo(W,H/2+50); ctx.stroke();
+    // 物体1
+    ctx.fillStyle='#3b82f6';
+    ctx.beginPath(); ctx.arc(simState.x1,H/2,r1,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#fff'; ctx.font='bold 12px sans-serif'; ctx.textAlign='center';
+    ctx.fillText('m₁',simState.x1,H/2+4);
+    // 速度箭头1
+    if(Math.abs(simState.v1)>1){
+        ctx.strokeStyle='#3b82f6'; ctx.lineWidth=2;
+        ctx.beginPath(); ctx.moveTo(simState.x1,H/2-r1-10);
+        ctx.lineTo(simState.x1+simState.v1*3,H/2-r1-10); ctx.stroke();
+    }
+    // 物体2
+    ctx.fillStyle='#ef4444';
+    ctx.beginPath(); ctx.arc(simState.x2,H/2,r2,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#fff'; ctx.font='bold 12px sans-serif';
+    ctx.fillText('m₂',simState.x2,H/2+4);
+    if(Math.abs(simState.v2)>1){
+        ctx.strokeStyle='#ef4444'; ctx.lineWidth=2;
+        ctx.beginPath(); ctx.moveTo(simState.x2,H/2-r2-10);
+        ctx.lineTo(simState.x2+simState.v2*3,H/2-r2-10); ctx.stroke();
+    }
+    // 碰撞闪光
+    if(simState.collided && time<0.5){
+        ctx.fillStyle='rgba(255,255,255,'+(0.5-time)+')';
+        ctx.beginPath(); ctx.arc((simState.x1+simState.x2)/2,H/2,30,0,Math.PI*2); ctx.fill();
+    }
+    // 动量守恒提示
+    const p1=params.m1*simState.v1/20, p2=params.m2*simState.v2/20;
+    ctx.fillStyle='rgba(255,255,255,.4)'; ctx.font='11px sans-serif'; ctx.textAlign='left';
+    ctx.fillText(`总动量 p = ${(p1+p2).toFixed(2)} kg·m/s`, 20, H-30);
+}
+
+function drawOrbit(){
+    const cx=W/2, cy=H/2;
+    // 轨迹
+    drawTrail('rgba(56,189,248,.25)');
+    // 中心天体
+    const cR=10+Math.log(params.M)*3;
+    ctx.fillStyle='#fbbf24';
+    ctx.beginPath(); ctx.arc(cx,cy,cR,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='rgba(251,191,36,.15)';
+    ctx.beginPath(); ctx.arc(cx,cy,cR+8,0,Math.PI*2); ctx.fill();
+    // 卫星
+    const sx=cx+simState.x, sy=cy+simState.y;
+    ctx.fillStyle='#38bdf8';
+    ctx.beginPath(); ctx.arc(sx,sy,6,0,Math.PI*2); ctx.fill();
+    // 速度向量
+    ctx.strokeStyle='#22c55e'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(sx,sy);
+    ctx.lineTo(sx+simState.vx*8,sy+simState.vy*8); ctx.stroke();
+    // 连线
+    ctx.strokeStyle='rgba(255,255,255,.08)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(sx,sy); ctx.stroke();
+}
+
+function drawWave(){
+    const cy=H/2;
+    const { amplitude, frequency, wavelength, speed, damping } = params;
+    // 主波
+    ctx.strokeStyle='#38bdf8'; ctx.lineWidth=2.5;
+    ctx.beginPath();
+    for(let x=0;x<W;x+=2){
+        const decay=damping>0?Math.exp(-damping*x*0.01):1;
+        const y=cy+amplitude*decay*Math.sin(2*Math.PI*(x/wavelength - simState.phase*frequency));
+        x===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+    // 包络线
+    if(damping>0){
+        ctx.strokeStyle='rgba(56,189,248,.2)'; ctx.lineWidth=1; ctx.setLineDash([4,4]);
+        ctx.beginPath();
+        for(let x=0;x<W;x+=4){ ctx.lineTo(x,cy+amplitude*Math.exp(-damping*x*0.01)); }
+        ctx.stroke();
+        ctx.beginPath();
+        for(let x=0;x<W;x+=4){ ctx.lineTo(x,cy-amplitude*Math.exp(-damping*x*0.01)); }
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+    // 质点标记
+    for(let x=30;x<W;x+=wavelength/4){
+        const decay=damping>0?Math.exp(-damping*x*0.01):1;
+        const y=cy+amplitude*decay*Math.sin(2*Math.PI*(x/wavelength - simState.phase*frequency));
+        ctx.fillStyle='#f97316';
+        ctx.beginPath(); ctx.arc(x,y,4,0,Math.PI*2); ctx.fill();
+    }
+    // 中线
+    ctx.strokeStyle='rgba(255,255,255,.1)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(0,cy); ctx.lineTo(W,cy); ctx.stroke();
+    // 标注
+    ctx.fillStyle='rgba(255,255,255,.3)'; ctx.font='11px sans-serif'; ctx.textAlign='left';
+    ctx.fillText(`λ = ${wavelength}px   f = ${frequency}Hz   A = ${amplitude}px`, 20, 30);
+}
+
+// ====== 数据面板 ======
+function updateDataPanel(){
+    const p=params, s=simState;
+    let rows = [];
+    switch(currentExp){
+        case 'projectile':
+            const vx=s.vx/3, vy=s.vy/3;
+            rows = [['位移 x',(s.x-50).toFixed(1)+'px'],['高度 h',(H-80-s.y).toFixed(1)+'px'],
+                    ['速度 v',Math.sqrt(vx*vx+vy*vy).toFixed(2)+'m/s'],['Vx',vx.toFixed(2)],['Vy',vy.toFixed(2)],
+                    ['动能 Ek',(0.5*p.mass*(vx*vx+vy*vy)).toFixed(1)+'J']]; break;
+        case 'pendulum':
+            const T=2*Math.PI*Math.sqrt(p.length/p.g);
+            rows=[['角度 θ',(s.theta*180/Math.PI).toFixed(1)+'°'],['角速度 ω',s.omega.toFixed(3)+'rad/s'],
+                  ['理论周期 T',T.toFixed(3)+'s'],['摆球速度',Math.abs(s.omega*p.length).toFixed(2)+'m/s']]; break;
+        case 'spring':
+            const T2=2*Math.PI*Math.sqrt(p.mass/p.k);
+            rows=[['位移 x',s.x.toFixed(3)+'m'],['速度 v',s.v.toFixed(3)+'m/s'],
+                  ['弹性势能',(0.5*p.k*s.x*s.x).toFixed(3)+'J'],['动能',(0.5*p.mass*s.v*s.v).toFixed(3)+'J'],
+                  ['理论周期',T2.toFixed(3)+'s']]; break;
+        case 'collision':
+            rows=[['v₁',((s.v1)/20).toFixed(2)+'m/s'],['v₂',((s.v2)/20).toFixed(2)+'m/s'],
+                  ['动量p₁',(p.m1*s.v1/20).toFixed(2)],['动量p₂',(p.m2*s.v2/20).toFixed(2)],
+                  ['总动量',(p.m1*s.v1/20+p.m2*s.v2/20).toFixed(2)],['状态',s.collided?'碰撞后':'碰撞前']]; break;
+        case 'orbit':
+            const r=Math.sqrt(s.x*s.x+s.y*s.y);
+            const v=Math.sqrt(s.vx*s.vx+s.vy*s.vy);
+            rows=[['轨道半径',r.toFixed(1)],['速度',v.toFixed(3)],['角动量',(s.x*s.vy-s.y*s.vx).toFixed(1)],
+                  ['动能',(0.5*p.m*v*v).toFixed(2)],['势能',(-p.G*p.M*p.m/r).toFixed(2)]]; break;
+        case 'wave':
+            rows=[['波长',p.wavelength+'px'],['频率',p.frequency+'Hz'],['周期',(1/p.frequency).toFixed(3)+'s'],
+                  ['波速',(p.wavelength*p.frequency).toFixed(1)+'px/s'],['相位',simState.phase.toFixed(2)+'rad']]; break;
+    }
+    document.getElementById('dataRows').innerHTML = rows.map(([k,v])=>`<div class="data-row"><span class="dk">${k}</span><span class="dv">${v}</span></div>`).join('');
+}
+
+// ====== 初始化 ======
+window.addEventListener('resize', resize);
+resize();
+buildParams();
+updateInfo();
+initState();
+drawFrame();
+</script>
+</body>
+</html>
